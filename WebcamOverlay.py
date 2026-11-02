@@ -34,7 +34,6 @@ cap = cv2.VideoCapture(1)
 detector = handDetector()
 flowers = []
 previousPoint = None
-particles =[]
 clear_gesture_active = False
 previous_time = time.time()
 
@@ -70,8 +69,8 @@ while True:
         clear_gesture = all(fingers_up)
         if clear_gesture and not clear_gesture_active:
             for item in flowers:
-                item["state"] = "falling"
-                item["vy"] = -2
+                item["state"] = "glowing"
+                item["vy"] = 0
                 item["glow_start"] = time.time()
             previousPoint = None
         clear_gesture_active = clear_gesture
@@ -80,38 +79,50 @@ while True:
         clear_gesture_active = False
 
     output=frame.copy()
+    remaining_flowers=[]
     for item in flowers:
         age=time.time()-item["start"]
         scale=min(age/0.4,1.0)
         angle=np.sin(age*2+item["phase"])*8
-        float_y=int(np.sin(age*2.2+item["phase"])*4)
+        if item["state"] == "glowing":
+            if time.time()-item["glow_start"] > 0.15:
+                item["state"] = "falling"
+        if item["state"] == "falling":
+            item["y"] += item["vy"] * dt * 60
+            item["vy"] += 0.25 * dt * 60
+            item["rotation"] += item["rotation_speed"] * dt * 60
+            angle = item["rotation"]
+            float_y = 0
+        else:
+            float_y = int(np.sin(age * 2.2 + item["phase"]) * 4)
         matrix=cv2.getRotationMatrix2D((half_size,half_size),angle,scale)
         animated = cv2.warpAffine(item["image"],matrix,(flower_size,flower_size),flags=cv2.INTER_LINEAR,borderMode=cv2.BORDER_CONSTANT,borderValue=(0,0,0,0))
-        x,y=item["x"],item["y"]+float_y
+        x, y = int(item["x"]), int(item["y"] + float_y)
+        if y > output.shape[0]:
+            continue
         h,w,_ = output.shape
         x1,y1=max(0,x),max(0,y)
         x2,y2=min(w,x+flower_size),min(h,y+flower_size)
         if x1<x2 and y1<y2:
             flower_crop = animated[y1 - y:y2 - y, x1 - x:x2 - x]
+            if item["glow_start"] is not None:
+                glow_age = time.time() - item["glow_start"]
+                glow_strength = max(0, 1 - glow_age / 0.25)
+                if glow_strength > 0:
+                    glow_mask = cv2.GaussianBlur(animated[:, :, 3], (0, 0), 10)
+                    glow_crop = glow_mask[y1 - y:y2 - y, x1 - x:x2 - x]
+                    glow_alpha = (glow_crop[:, :, None] / 255.0) * glow_strength * 0.5
+                    glow_color = np.zeros_like(output[y1:y2, x1:x2])
+                    glow_color[:] = (180, 220, 255)
+                    background = output[y1:y2, x1:x2]
+                    output[y1:y2, x1:x2] = (glow_alpha * glow_color +(1 - glow_alpha) * background).astype(np.uint8)
             alpha = flower_crop[:, :, 3:4] / 255.0
             flower_rgb = flower_crop[:, :, :3]
             background = output[y1:y2, x1:x2]
             output[y1:y2, x1:x2] = (alpha * flower_rgb + (1 - alpha) * background).astype(np.uint8)
+        remaining_flowers.append(item)
+    flowers = remaining_flowers
 
-    alive_particles = []
-    for particle in particles:
-        age = time.time() - particle["start"] #how long particle existed
-        if age < particle["life"]:
-            particle["x"] += particle["vx"] * dt * 60
-            particle["y"] += particle["vy"] * dt * 60
-            particle["vy"] += 7.2 * dt * 60
-            particle["vx"] *= 0.99 ** (dt * 60)
-            fade = 1 - age / particle["life"]
-            radius = max(1, int(5 * fade))
-            brightness = int(255 * fade)
-            cv2.circle(output,(int(particle["x"]), int(particle["y"])),radius,(brightness, brightness, brightness),cv2.FILLED)
-            alive_particles.append(particle)
-    particles = alive_particles
     cv2.imshow("Flower Painting", output)
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break
