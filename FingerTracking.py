@@ -2,7 +2,6 @@ import cv2
 import mediapipe as mp
 import time
 
-
 class handDetector():
     def __init__(self, mode=False, maxHands=2, detectionCon=0.5, trackCon=0.5):
         self.mode = mode
@@ -26,9 +25,7 @@ class handDetector():
         return img
 
     def findPosition(self, img, handNo=0, draw=True):
-
         lmList = []
-
         if self.results.multi_hand_landmarks:
             myHand = self.results.multi_hand_landmarks[handNo]
             for id, lm in enumerate(myHand.landmark):
@@ -43,14 +40,19 @@ class handDetector():
 def main():
     pTime = 0
     cTime = 0
-    cap = cv2.VideoCapture(1)
+    cap = cv2.VideoCapture(1, cv2.CAP_AVFOUNDATION)
     detector = handDetector()
     while True:
         success, img = cap.read()
+        if not success:
+            print("Cannot access webcam!")
+            break
         img = detector.findHand(img)
         lmList = detector.findPosition(img)
         if len(lmList) != 0:
-            print(lmList[4])
+            x,y=lmList[8][1],lmList[8][2]
+            print("X: ",x,'Y: ',y)
+            cv2.circle(img,(x,y),5,(0,255,0),cv2.FILLED)
 
         cTime=time.time()
         fps=1/(cTime-pTime)
@@ -59,8 +61,10 @@ def main():
         cv2.putText(img, str(int(fps)), (10, 70),
                 cv2.FONT_HERSHEY_DUPLEX, 3, (255,0,255), 10)
         cv2.imshow("Image",img)
-        cv2.waitKey(1) & 0xFF==ord('q')
-
+        if cv2.waitKey(1) & 0xFF==ord('q'):
+            break
+    cap.release()
+    cv2.destroyAllWindows()
 
 if __name__== "__main__":
     main()

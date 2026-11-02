@@ -16,11 +16,15 @@ alpha = overlay[:, :, 3] / 255.0
 flower = overlay[:, :, :3]
 
 cap = cv2.VideoCapture(1)
+canvas = None
 while True:
     success, frame = cap.read()
     if not success:
         print("Cannot access webcam!")
         break
+    if canvas is None:
+        canvas = frame.copy()
+    cv2.imshow("Canvas", canvas)
     frame = cv2.flip(frame, 1)
     x, y = 100, 100
     roi = frame[y:y+150, x:x+150]
