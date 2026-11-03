@@ -36,11 +36,30 @@ class handDetector():
                     cv2.circle(img, (cx, cy), 7,(255, 0, 255), cv2.FILLED)
         return lmList
 
+    def findAllHands(self, img, draw=False):
+        allHands = []
+        if self.results.multi_hand_landmarks:
+            for handNo, handLms in enumerate(self.results.multi_hand_landmarks):
+                lmList = []
+                h, w, c = img.shape
+                for id, lm in enumerate(handLms.landmark):
+                    cx, cy = int(lm.x * w), int(lm.y * h)
+                    lmList.append([id, cx, cy])
+                handType = self.results.multi_handedness[handNo].classification[0].label
+                # if handType == "Right":
+                #     handType = "Left"
+                # else:
+                #     handType = "Right"
+                handInfo = {"type": handType,"landmarks": lmList}
+                allHands.append(handInfo)
+                if draw:
+                    self.mpDraw.draw_landmarks(img, handLms, self.mpHands.HAND_CONNECTIONS)
+        return allHands
 
 def main():
     pTime = 0
     cTime = 0
-    cap = cv2.VideoCapture(1, cv2.CAP_AVFOUNDATION)
+    cap = cv2.VideoCapture(0, cv2.CAP_AVFOUNDATION)
     detector = handDetector()
     while True:
         success, img = cap.read()
@@ -48,12 +67,13 @@ def main():
             print("Cannot access webcam!")
             break
         img = detector.findHand(img)
-        lmList = detector.findPosition(img)
-        if len(lmList) != 0:
-            x,y=lmList[8][1],lmList[8][2]
-            print("X: ",x,'Y: ',y)
-            cv2.circle(img,(x,y),5,(0,255,0),cv2.FILLED)
-
+        hands = detector.findAllHands(img)
+        for hand in hands:
+            handType = hand["type"]
+            lmList = hand["landmarks"]
+            x, y = lmList[8][1], lmList[8][2]
+            print(handType, "Hand - X:", x, "Y:", y)
+            cv2.circle(img, (x, y), 10, (0, 255, 0), cv2.FILLED)
         cTime=time.time()
         fps=1/(cTime-pTime)
         pTime=cTime
