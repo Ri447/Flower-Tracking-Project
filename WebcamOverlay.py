@@ -1,15 +1,9 @@
-import cv2
-import time
-import random
-import glob
-import os
-from mediapipe.modules import face_landmark
+import cv2,time,random,glob,os,math
 from FingerTracking import handDetector
 import numpy as np
 from Transformations.FaceMeshModule import FaceMeshDetector
 
 flower_size = 100
-# half_size = flower_size // 2
 flower_images = []
 fps = 0
 flower_bag = []
@@ -36,16 +30,6 @@ for path in glob.glob("Flowers/*.png"):
 if len(flower_images) == 0:
     print("No valid transparent flower images found!")
     exit()
-# overlay=cv2.imread("Flowers/2.png",cv2.IMREAD_UNCHANGED)
-# if overlay is None:
-#     print("Flower image not found!")
-#     exit()
-# if overlay.shape[2] != 4:
-#     print("Flower must have an alpha channel!")
-#     exit()
-# overlay=cv2.resize(overlay,(150,150))
-# alpha = overlay[:, :, 3] / 255.0
-# flower = overlay[:, :, :3]
 
 def overlay_transparent(background, overlay, x, y):
     h, w = background.shape[:2]
@@ -63,13 +47,26 @@ def overlay_transparent(background, overlay, x, y):
     background[y1:y2, x1:x2] = (alpha * overlay_rgb +(1 - alpha) * background_crop).astype(np.uint8)
     return background
 
+def rotate_overlay(image, angle):
+    h, w = image.shape[:2]
+    center = (w // 2, h // 2)
+    matrix = cv2.getRotationMatrix2D(center, angle, 1.0)
+    cos = abs(matrix[0, 0])
+    sin = abs(matrix[0, 1])
+    new_w = int((h * sin) + (w * cos))
+    new_h = int((h * cos) + (w * sin))
+    matrix[0, 2] += (new_w / 2) - center[0]
+    matrix[1, 2] += (new_h / 2) - center[1]
+    rotated = cv2.warpAffine(image,matrix,(new_w, new_h),flags=cv2.INTER_LINEAR,borderMode=cv2.BORDER_CONSTANT,borderValue=(0, 0, 0, 0))
+    return rotated
+
 def handle_mouse(event, x, y, flags, param):
     global crown_mode_active
     if event == cv2.EVENT_LBUTTONDOWN:
         if 20 <= x <= 190 and 20 <= y <= 65:
             crown_mode_active = not crown_mode_active
 
-cap = cv2.VideoCapture(0)
+cap = cv2.VideoCapture(1)
 detector = handDetector()
 face_detector=FaceMeshDetector(staticMode=False, maxFaces=3,minDetectionCon=0.5,minTrackCon=0.5)
 crown_mode_active = False
@@ -81,6 +78,10 @@ clear_gesture_active = False
 current_flower_size = 100
 previous_time = time.time()
 os.makedirs("Captured Photos", exist_ok=True)
+
+# CROWN SMOOTHING
+crown_positions = {}
+smoothing_factor = 0.25
 
 while True:
     current_time = time.time()
@@ -97,20 +98,18 @@ while True:
     hands=detector.findAllHands(frame)
     if crown_mode_active:
         frame=face_detector.findFaceMesh(frame,draw=False)
-        forehead_points=face_detector.getForeheadLandmarks(frame)
-    else:
-        forehead_points=[]
-    # if forehead_points:
-    #     for point in forehead_points:
-    #         _, x, y, _ = point
-    #         cv2.circle(frame, (x, y), 3, (0, 255, 255), cv2.FILLED)
 
     #HAND GESTURE
     detected_hands=set()
     left_clear_gesture = False
     for hand in hands:
-        handType=hand["type"]
-        lmList=hand["landmarks"]
+        lmList = hand["landmarks"]
+        wrist_x = lmList[0][1]
+        frame_middle = frame.shape[1] // 2
+        if wrist_x < frame_middle:
+            handType = "Left"
+        else:
+            handType = "Right"
         cv2.putText(frame,handType,(lmList[8][1], lmList[8][2] - 20),cv2.FONT_HERSHEY_SIMPLEX,0.8,(0, 255, 255),2)
         detected_hands.add(handType)
         x, y = lmList[8][1], lmList[8][2]
@@ -126,21 +125,8 @@ while True:
             pinch_distance = np.linalg.norm(np.array([thumb_tip[1], thumb_tip[2]]) - np.array([index_tip[1], index_tip[2]]))
             current_flower_size=int(np.interp(pinch_distance,[55,150],[20,120]))
             cv2.putText(frame, f"Flower Size: {current_flower_size}", (20, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.8,(255, 255, 255), 2)
-            left_clear_gesture = (handType == "Left"and all(fingers_up))
+            left_clear_gesture = all(fingers_up)
 
-
-        # #RIGHT HAND: CROWN ACTIVATION
-        # if handType == "Right":
-        #     right_on_side=frame.shape[1]*0.5
-        #     if right_on_side and not previous_right_on_side:
-        #         crown_mode_active = not crown_mode_active
-        #     previous_right_on_side = right_on_side
-        #     if crown_mode_active:
-        #         cv2.putText(frame,"CROWN MODE ON",(20, 140),cv2.FONT_HERSHEY_SIMPLEX,0.8,(0, 255, 255),2)
-
-        #BOTH HANDS: DRAW FLOWERS
-        # x -= half_size
-        # y -= half_size
         #DRAW FLOWERS
         if (handType=="Right" and index_up and not middle_up and not ring_up and not pinky_up):
             if previousPoint[handType] is None or np.linalg.norm(np.array([x, y]) - np.array(previousPoint[handType])) > 50:
@@ -150,18 +136,9 @@ while True:
                 if 0 <= flower_x <= frame.shape[1] - new_size and 0 <= flower_y <= frame.shape[0] - new_size:
                     flowers.append({"x": flower_x,"y": flower_y,"start": time.time(),"phase": np.random.uniform(0, 2 * np.pi),"float_speed": random.uniform(1.5, 3.0),"float_amplitude": random.uniform(2, 7),"image":get_random_flower(),"state": "planted","vy":0,"vx": random.uniform(-1.5,1.5),"wind_phase": random.uniform(0, 2 * np.pi),"wind_speed": random.uniform(1.0, 2.5),"wind_strength": random.uniform(0.3, 1.0),"rotation": random.uniform(-25, 25),"rotation_speed": np.random.uniform(-3, 3),"glow_start": None,"size": new_size})
                     previousPoint[handType] = (x, y)
-        # clear_gesture = all(fingers_up)
-        # if clear_gesture and not clear_gesture_active:
-        #     for item in flowers:
-        #         item["state"] = "glowing"
-        #         item["vy"] = 0
-        #         item["glow_start"] = time.time()
-        #     previousPoint = None
-        # clear_gesture_active = clear_gesture
-        # clear_gesture_active = False
 
     #LEFT HAND OPEN PALM: CLEAR FLOWERS
-    if left_clear_gesture and not clear_gesture_active:
+    if "Left" in detected_hands and left_clear_gesture and not clear_gesture_active:
         for item in flowers:
             item["state"] = "glowing"
             item["vy"] = 0
@@ -230,19 +207,49 @@ while True:
     flowers = remaining_flowers
 
     #CROWN OVERLAY
-    if crown_mode_active and forehead_points:
-        face_landmarks=face_detector.findPosition(frame)
-        face_points={point[0]:(point[1],point[2]) for point in face_landmarks}
-        if 234 in face_points and 454 in face_points:
+    if (crown_mode_active and face_detector.results and face_detector.results.multi_face_landmarks):
+        face_count = len(face_detector.results.multi_face_landmarks)
+        for faceNo in range(face_count):
+            face_landmarks=face_detector.findPosition(frame,faceNo=faceNo)
+            forehead_points=face_detector.getForeheadLandmarks(frame,faceNo=faceNo)
+            if not forehead_points:
+                continue
+            face_points = {point[0]: (point[1], point[2])for point in face_landmarks}
+            required_points = [234, 454, 33, 263]
+            if not all(point in face_points for point in required_points):
+                continue
             face_width=abs(face_points[454][0]-face_points[234][0])
+            eye_1 = face_points[33]
+            eye_2 = face_points[263]
+            left_eye, right_eye = sorted([eye_1, eye_2], key=lambda p: p[0])
+            head_angle = math.degrees(math.atan2(right_eye[1] - left_eye[1],right_eye[0] - left_eye[0]))
             forehead_x=int(np.mean([point[1] for point in forehead_points]))
             forehead_y=int(np.mean([point[2] for point in forehead_points]))
-            crown_width = int(face_width * 1.35)
-            crown_height = int(crown_width * crown_image.shape[0] /crown_image.shape[1])
-            crown_x = forehead_x - crown_width // 2
-            crown_y = forehead_y - crown_height + int(crown_height * 0.15)
+            target_crown_width = int(face_width * 1.35)
+            if faceNo not in crown_positions:
+                crown_width = target_crown_width
+                smoothed_angle = head_angle
+            else:
+                previous = crown_positions[faceNo]
+                crown_width = int(previous["width"] +(target_crown_width - previous["width"]) * smoothing_factor)
+                angle_difference = (head_angle - previous["angle"] + 180) % 360 - 180
+                previous["angle"] += angle_difference * smoothing_factor
+                smoothed_angle = previous["angle"]
+            crown_height = int(crown_width * crown_image.shape[0] / crown_image.shape[1])
             resized_crown = cv2.resize(crown_image,(crown_width, crown_height),interpolation=cv2.INTER_AREA)
-            output = overlay_transparent(output,resized_crown,crown_x,crown_y)
+            rotated_crown = rotate_overlay(resized_crown, -smoothed_angle)
+            target_x = forehead_x - rotated_crown.shape[1] // 2
+            target_y = forehead_y - rotated_crown.shape[0] + int(crown_height * 0.15)
+            if faceNo not in crown_positions:
+                crown_positions[faceNo] = {"x": target_x,"y": target_y,"width": crown_width,"angle": head_angle}
+            else:
+                previous = crown_positions[faceNo]
+                previous["x"] += (target_x - previous["x"]) * smoothing_factor
+                previous["y"] += (target_y - previous["y"]) * smoothing_factor
+                previous["width"] = crown_width
+            crown_x = int(crown_positions[faceNo]["x"])
+            crown_y = int(crown_positions[faceNo]["y"])
+            output = overlay_transparent(output, rotated_crown, crown_x, crown_y)
 
     # CROWN BUTTON
     button_color = (180, 120, 200) if crown_mode_active else (80, 80, 80)
